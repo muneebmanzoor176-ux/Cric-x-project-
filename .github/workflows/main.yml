@@ -1,0 +1,119 @@
+name: Android APK Builder
+
+on:
+workflow_dispatch:
+push:
+paths:
+- '*.zip'
+- '.github/workflows/build-apk.yml'
+
+permissions:
+contents: read
+
+jobs:
+build:
+name: Build Android APK
+runs-on: ubuntu-latest
+timeout-minutes: 30
+
+steps:
+  # Checkout repository
+  - name: Checkout Repository
+    uses: actions/checkout@v4
+
+  # Configure Java
+  - name: Setup Java Environment
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
+
+  # Extract Android Project ZIP
+  - name: Extract Android Project
+    shell: bash
+    run: |
+      set -e
+
+      ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+
+      if [ -z "$ZIP_FILE" ]; then
+        echo "::error::No Android project ZIP found."
+        exit 1
+      fi
+
+      mkdir -p extracted
+      unzip -q "$ZIP_FILE" -d extracted
+
+      echo "Project extracted successfully."
+
+  # Locate Gradle Project
+  - name: Detect Android Gradle Project
+    shell: bash
+    run: |
+      set -e
+
+      GRADLEW=$(find extracted -type f -name gradlew | head -n 1)
+
+      if [ -z "$GRADLEW" ]; then
+        echo "::error::Gradle wrapper (gradlew) not found."
+        exit 1
+      fi
+
+      PROJECT_DIR=$(dirname "$GRADLEW")
+
+      echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      chmod +x "$GRADLEW"
+
+      echo "Android project detected: $PROJECT_DIR"
+
+  # Setup Gradle
+  - name: Setup Gradle
+    uses: gradle/actions/setup-gradle@v4
+
+  # Build Release APK
+  - name: Build Release APK
+    run: |
+      cd "$PROJECT_DIR"
+      ./gradlew assembleRelease --no-daemon
+
+  # Build Debug APK
+  - name: Build Debug APK
+    run: |
+      cd "$PROJECT_DIR"
+      ./gradlew assembleDebug --no-daemon
+
+  # Collect APK Files
+  - name: Collect APK Files
+    shell: bash
+    run: |
+      set -e
+
+      mkdir -p final-apk
+
+      find "$PROJECT_DIR" -type f -name "*.apk" \
+        -exec cp {} final-apk/ \;
+
+      if [ -z "$(ls -A final-apk)" ]; then
+        echo "::error::No APK files generated."
+        exit 1
+      fi
+
+      echo "Generated APK files:"
+      ls -lh final-apk/
+
+  # Upload APK Artifacts
+  - name: Upload Android APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: Android-APK
+      path: final-apk/*.apk
+      if-no-files-found: error
+      retention-days: 14
+
+  # Build Summary
+  - name: Build Summary
+    if: always()
+    run: |
+      echo "## Android APK Build Report" >> "$GITHUB_STEP_SUMMARY"
+      echo "Build completed. Check the job status and APK artifacts above." >> "$GITHUB_STEP_SUMMARY"
